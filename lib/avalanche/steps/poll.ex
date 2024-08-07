@@ -46,7 +46,8 @@ defmodule Avalanche.Steps.Poll do
 
       {_request, result} = Req.Request.run_request(request)
 
-      {Req.Request.halt(request), result}
+      #temp, need Exception or Req.Response struct not a string here
+      {Req.Request.halt(request, "max attempts exceeded"), result}
     else
       {request, response}
     end
