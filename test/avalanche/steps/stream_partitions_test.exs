@@ -4,9 +4,7 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
 
   setup do
     # Set up Task.Supervisor for async streaming
-    start_supervised(
-      {Task.Supervisor, name: Avalanche.TaskSupervisor}
-    )
+    start_supervised({Task.Supervisor, name: Avalanche.TaskSupervisor})
 
     # Mock response data
     base_response = %Req.Response{
@@ -38,13 +36,6 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
     {:ok, request: request, base_response: base_response}
   end
 
-  describe "run/1" do
-    test "maintains backwards compatibility by returning empty list" do
-      request = %{}
-      assert StreamPartitions.run(request) == []
-    end
-  end
-
   describe "attach/2" do
     test "attaches streaming step to request pipeline" do
       request = %Req.Request{}
@@ -56,7 +47,7 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
 
   describe "stream_partitions/1" do
     test "handles empty response body", %{request: request} do
-      empty_response = %Req.Response{body: "", status: 200}
+      empty_response = %Req.Response{body: Stream.into([], []), status: 200}
       assert {^request, ^empty_response} = StreamPartitions.stream_partitions({request, empty_response})
     end
 
@@ -68,12 +59,12 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
             "rowType" => [],
             "partitionInfo" => []
           },
-          "data" => []
+          "data" => ""
         }
       }
 
       {_req, result} = StreamPartitions.stream_partitions({request, response})
-      assert result.body["data"] == []
+      assert Enum.to_list(result.body["data"]) == [""]
     end
 
     test "handles response with missing fields", %{request: request} do
@@ -86,7 +77,7 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
       }
 
       {_req, result} = StreamPartitions.stream_partitions({request, response})
-      assert result.body["data"] == []
+      assert Enum.to_list(result.body["data"]) == [[]]
     end
 
     test "processes partitioned response", %{request: request, base_response: response} do

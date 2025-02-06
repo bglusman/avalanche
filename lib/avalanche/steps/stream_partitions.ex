@@ -11,14 +11,6 @@ defmodule Avalanche.Steps.StreamPartitions do
   require Logger
 
   @doc """
-  For backwards compatibility - returns all partitions as a list.
-  """
-  def run(_request) do
-    # For backwards compatibility, return empty list as the stub did before
-    []
-  end
-
-  @doc """
   Attach the streaming step to a Req pipeline.
 
   ## Options
@@ -51,18 +43,24 @@ defmodule Avalanche.Steps.StreamPartitions do
 
     partition_stream =
       case {path, partitions} do
-        {nil, _} -> []
-        {_, []} -> []
-        {_, "0"} -> []
+        {nil, _} ->
+          []
+
+        {_, []} ->
+          []
+
+        {_, "0"} ->
+          []
+
         {path, [_head | rest]} when is_binary(path) ->
-          tasks = 
+          tasks =
             rest
             |> Stream.with_index(1)
             |> Stream.map(fn {_info, partition} ->
               build_status_request(request, path, partition, row_types)
             end)
-            |> Enum.map(fn req -> 
-              Task.Supervisor.async_nolink(Avalanche.TaskSupervisor, fn -> 
+            |> Enum.map(fn req ->
+              Task.Supervisor.async_nolink(Avalanche.TaskSupervisor, fn ->
                 Req.Request.run_request(req)
               end)
             end)
@@ -71,11 +69,15 @@ defmodule Avalanche.Steps.StreamPartitions do
           |> Task.yield_many(timeout)
           |> Enum.map(fn {task, result} ->
             case result do
-              {:ok, value} -> value
+              {:ok, value} ->
+                value
+
               nil ->
                 Task.shutdown(task, :brutal_kill)
                 error_response("Task timeout")
-              {:exit, reason} -> error_response(reason)
+
+              {:exit, reason} ->
+                error_response(reason)
             end
           end)
           |> Stream.map(&handle_partition_response/1)
@@ -98,7 +100,7 @@ defmodule Avalanche.Steps.StreamPartitions do
 
   defp build_status_request(%Req.Request{} = request, path, partition, row_types) do
     url = URI.parse(path)
-    url = %{url | query: URI.encode_query([partition: partition])}
+    url = %{url | query: URI.encode_query(partition: partition)}
 
     request
     |> reset_req_request()
@@ -145,9 +147,8 @@ defmodule Avalanche.Steps.StreamPartitions do
       partition_stream
       |> Stream.filter(&(&1.status == 200))
       |> Stream.flat_map(&Map.get(&1.body, "data", []))
-      |> Enum.to_list()
 
-    %{response | body: Map.put(response.body, "data", data ++ partition_data)}
+    %{response | body: Map.put(response.body, "data", Stream.concat([data], partition_data))}
   end
 
   defp reduce_responses(response, _data, _partition_stream), do: response
