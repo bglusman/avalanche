@@ -125,11 +125,11 @@ defmodule Avalanche.StatementRequest do
       |> Steps.Poll.attach(disable_polling, poll_options)
       |> Steps.DecodeData.attach(decode_data_options)
 
-      if streaming? do
-        Steps.StreamPartitions.attach(base_pipeline, get_partitions_options)
-      else
-        Steps.GetPartitions.attach(base_pipeline, get_partitions_options)
-      end
+    if streaming? do
+      Steps.StreamPartitions.attach(base_pipeline, get_partitions_options)
+    else
+      Steps.GetPartitions.attach(base_pipeline, get_partitions_options)
+    end
   end
 
   defp build_params(opts) do

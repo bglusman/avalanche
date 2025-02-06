@@ -32,8 +32,8 @@ defmodule Avalanche.Steps.StreamPartitions do
 
   def stream_partitions({request, %{status: 200, body: %{"resultSetMetaData" => metadata} = body} = response}) do
     options = request.options || %{}
-    _max_concurrency = Map.get(options, :max_concurrency, System.schedulers_online())
-    timeout = Map.fetch!(options, :timeout)
+    max_concurrency = Map.get(options, :max_concurrency, System.schedulers_online())
+    timeout = Map.get(options, :timeout, 120_000)  # Default to 2 minutes
 
     path = Map.get(body, "statementStatusUrl")
     data = Map.get(body, "data", [])
@@ -53,44 +53,44 @@ defmodule Avalanche.Steps.StreamPartitions do
           []
 
         {path, [_head | rest]} when is_binary(path) ->
-          tasks =
-            rest
-            |> Stream.with_index(1)
-            |> Stream.map(fn {_info, partition} ->
-              build_status_request(request, path, partition, row_types)
-            end)
-            |> Enum.map(fn req ->
-              Task.Supervisor.async_nolink(Avalanche.TaskSupervisor, fn ->
-                Req.Request.run_request(req)
-              end)
-            end)
-
-          tasks
-          |> Task.yield_many(timeout)
-          |> Enum.map(fn {task, result} ->
-            case result do
-              {:ok, value} ->
-                value
-
-              nil ->
-                Task.shutdown(task, :brutal_kill)
-                error_response("Task timeout")
-
-              {:exit, reason} ->
-                error_response(reason)
-            end
+          rest
+          |> Stream.with_index(1)
+          |> Stream.map(fn {_info, partition} ->
+            build_status_request(request, path, partition, row_types)
+          end)
+          |> Task.async_stream(
+            fn req -> 
+              Req.Request.run_request(req)
+            end,
+            ordered: true,
+            max_concurrency: max_concurrency,
+            timeout: timeout,
+            on_timeout: :kill_task
+          )
+          |> Stream.map(fn
+            {:ok, {:ok, value}} -> value
+            {:ok, error} -> error_response(error)
+            {:exit, reason} -> error_response(reason)
           end)
           |> Stream.map(&handle_partition_response/1)
+          |> Stream.filter(&(&1.status == 200))
+          |> Stream.flat_map(&Map.get(&1.body, "data", []))
       end
 
-    {request, reduce_responses(response, data, partition_stream)}
+    # Create a stream of the initial data and partition data
+    stream = Stream.concat(Stream.map([data], & &1), partition_stream)
+    {request, %{response | body: Map.put(body, "data", stream)}}
   end
 
   def stream_partitions({request, %{status: 200, body: ""} = response}) do
     {request, response}
   end
 
-  def stream_partitions({request, %{status: 200} = response}) do
+  def stream_partitions({request, %{status: 202} = response}) do
+    {request, response}
+  end
+
+  def stream_partitions({request, %{status: status} = response}) when status >= 400 do
     {request, response}
   end
 
@@ -98,21 +98,22 @@ defmodule Avalanche.Steps.StreamPartitions do
 
   # Private helpers
 
-  defp build_status_request(%Req.Request{} = request, path, partition, row_types) do
-    url = URI.parse(path)
-    url = %{url | query: URI.encode_query(partition: partition)}
+  defp build_status_request(request, path, partition, row_types) do
+    # Start with a new request but copy over the relevant options from the original
+    # Handle cases where headers might be nil
+    headers = request.headers || %{}
+    options = request.options || %{}
 
-    request
-    |> reset_req_request()
-    |> Req.merge(
+    Req.new(
       method: :get,
-      body: "",
-      url: url
+      url: path,
+      params: [partition: partition],
+      auth: options[:auth],  # Get auth from options
+      headers: headers,
+      receive_timeout: options[:timeout]  # Map our timeout to Req's receive_timeout
     )
     |> Req.Request.put_private(:avalanche_row_types, row_types)
   end
-
-  defp reset_req_request(request), do: %{request | current_request_steps: Keyword.keys(request.request_steps)}
 
   defp handle_partition_response(response) do
     case response do
@@ -131,25 +132,6 @@ defmodule Avalanche.Steps.StreamPartitions do
   end
 
   defp error_response(reason) do
-    %Req.Response{
-      status: 500,
-      body: %{
-        "message" => "Error retrieving partition",
-        "data" => %{},
-        "code" => "PARTITION_ERROR",
-        "error" => inspect(reason)
-      }
-    }
+    %{status: 500, body: %{"message" => inspect(reason)}}
   end
-
-  defp reduce_responses(response, data, partition_stream) when is_list(partition_stream) do
-    partition_data =
-      partition_stream
-      |> Stream.filter(&(&1.status == 200))
-      |> Stream.flat_map(&Map.get(&1.body, "data", []))
-
-    %{response | body: Map.put(response.body, "data", Stream.concat([data], partition_data))}
-  end
-
-  defp reduce_responses(response, _data, _partition_stream), do: response
 end

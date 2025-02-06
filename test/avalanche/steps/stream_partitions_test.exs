@@ -24,14 +24,19 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
       }
     }
 
-    # Mock request with options
-    request = %Req.Request{
-      options: %{
+    # Mock request with all necessary fields
+    request = 
+      Req.new(
+        url: "https://example.snowflakecomputing.com",
+        auth: {:bearer, "test-token"},
+        headers: %{"Content-Type" => "application/json"},
+        receive_timeout: 120_000
+      )
+      |> Req.Request.register_options([:max_concurrency, :timeout])  # Register our custom options
+      |> Req.Request.merge_options(
         timeout: 120_000,
         max_concurrency: System.schedulers_online()
-      },
-      request_steps: []
-    }
+      )
 
     {:ok, request: request, base_response: base_response}
   end
@@ -83,8 +88,8 @@ defmodule Avalanche.Steps.StreamPartitionsTest do
     test "processes partitioned response", %{request: request, base_response: response} do
       {_req, result} = StreamPartitions.stream_partitions({request, response})
 
-      assert is_list(result.body["data"])
-      assert length(result.body["data"]) >= 1
+      assert is_function(result.body["data"])
+      assert length(Enum.to_list(result.body["data"])) >= 1
     end
   end
 end
